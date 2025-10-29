@@ -1,0 +1,11 @@
+# binaries
+masker
+*.exe
+*.out
+
+# tests
+cover.out
+cover.html
+
+# macOS
+.DS_Store
