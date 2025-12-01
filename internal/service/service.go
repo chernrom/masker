@@ -1,6 +1,11 @@
 package service
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
+
+const maxGoroutines = 10
 
 type Producer interface {
 	Produce() ([]string, error)
@@ -31,8 +36,64 @@ func (s *Service) Run() error {
 	}
 
 	out := make([]string, len(in))
-	for i, line := range in {
-		out[i] = s.maskHttpLinks(line)
+
+	type job struct {
+		idx  int
+		line string
+	}
+
+	type result struct {
+		idx  int
+		line string
+	}
+
+	jobs := make(chan job)
+	results := make(chan result)
+
+	sem := make(chan struct{}, maxGoroutines) //ставим лимит, вынес отдельно в константу
+	var wg sync.WaitGroup
+
+	//worker
+	wg.Add(maxGoroutines)
+	go func() {
+		for j := range jobs {
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() {
+					<-sem
+				}()
+
+				masked := s.maskHttpLinks(j.line)
+				results <- result{
+					idx:  j.idx,
+					line: masked,
+				}
+			}()
+		}
+
+	}()
+
+	//producer
+	go func() {
+		for i, line := range in {
+			jobs <- job{
+				idx:  i,
+				line: line,
+			}
+		}
+		close(jobs)
+	}()
+
+	//watcher
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	//collector
+	for r := range results {
+		out[r.idx] = r.line
 	}
 
 	if err := s.pres.Present(out); err != nil {
